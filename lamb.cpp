@@ -4,6 +4,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -115,19 +116,93 @@ private:
     }
 };
 
+class ParseError : public std::runtime_error {
+public:
+    ParseError(const std::string &message) : std::runtime_error(message) {}
+};
+
+class Parser {
+public:
+    std::vector<Token> tokens;
+    size_t curr = 0;
+
+    Parser(std::vector<Token> &tokens) : tokens{tokens} {}
+
+    bool match(TokenKind kind) {
+        TokenKind expected = isEnd() ? TokenKind::End : tokens[curr].kind;
+        if (kind == expected) {
+            curr++;
+            return true;
+        }
+        return false;
+    }
+
+    Token consume(TokenKind kind, std::string err_msg) {
+        TokenKind expected = isEnd() ? TokenKind::End : tokens[curr].kind;
+        if (kind == expected) {
+            return advance();
+        }
+        throw ParseError(err_msg);
+    }
+
+private:
+    Token advance() { return tokens[curr++]; }
+    bool isEnd() { return curr >= tokens.size(); }
+};
+
 std::vector<Token> tokenizer(std::string_view source) {
     std::vector<Token> tokens;
     Lexer lexer(source);
-    while (!lexer.isEnd()) {
+    while (true) {
         Token new_token = lexer.scanToken();
-        if (new_token.kind == TokenKind::End) break;
         tokens.push_back(new_token);
+        if (new_token.kind == TokenKind::End) break;
     }
     return tokens;
 }
 
-void pparse(std::string source) {
-    std::vector<Token> tokens = tokenizer(source);
+ExprPrt parse_fun(Parser &parser);
+ExprPrt parse_var(Parser &parser);
+ExprPrt parse_term(Parser &parser);
+
+ExprPrt parse_expr(Parser &parser) {
+    ExprPrt expr = parse_term(parser);
+    while (!(parser.match(TokenKind::CloseParen) || parser.match(TokenKind::End))) {
+        ExprPrt rhs = parse_term(parser);
+        expr = make_app(expr, rhs);
+    }
+    return expr;
+}
+
+ExprPrt parse_term(Parser &parser) {
+    if (parser.match(TokenKind::Lambda)) {
+        return parse_fun(parser);
+    } else if (parser.match(TokenKind::OpenParen)) {
+        return parse_expr(parser);
+    } else {
+        return parse_var(parser);
+    }
+}
+
+ExprPrt parse_fun(Parser &parser) {
+    Token name_token = parser.consume(TokenKind::Name, "Function Name Syntax Error");
+    std::string name = name_token.name;
+    parser.consume(TokenKind::Dot, "Function Dot Syntax Error");
+    ExprPrt body = parse_expr(parser);
+
+    return make_fun(name, body);
+}
+
+ExprPrt parse_var(Parser &parser) {
+    std::string err_msg = "Variable Syntax Error";
+
+    Token name_token = parser.consume(TokenKind::Name, err_msg);
+    std::string name = name_token.name;
+
+    return make_var(name);
+}
+
+void pparse(std::vector<Token> &tokens) {
     for (Token token : tokens) {
         std::string token_kind;
         switch (token.kind) {
@@ -186,10 +261,17 @@ void display(ExprPrt expr) {
             using T = std::decay_t<decltype(node)>;
 
             if constexpr (std::is_same_v<T, Var>) {
-                std::cout << node.name << '_' << node.id;
+                std::cout << node.name;
             } else if constexpr (std::is_same_v<T, Fun>) {
-                std::cout << "(\\" << node.arg << '_' << node.arg_id << '.';
-                display(node.body);
+                std::cout << "(\\" << node.arg << '.';
+                if (std::holds_alternative<App>(node.body->data)) {
+                    auto &app_node = std::get<App>(node.body->data);
+                    display(app_node.lhs);
+                    std::cout << ' ';
+                    display(app_node.rhs);
+                } else {
+                    display(node.body);
+                }
                 std::cout << ")";
             } else if constexpr (std::is_same_v<T, App>) {
                 std::cout << '(';
@@ -204,7 +286,7 @@ void display(ExprPrt expr) {
 
 void trace_expr(ExprPrt expr) {
     display(expr);
-    std::cout << std::endl;
+    // std::cout << std::endl;
 }
 
 /** Apply val to the body (recursively)
@@ -244,15 +326,14 @@ ExprPrt eval(ExprPrt expr) {
                 }
                 return expr;
             } else if constexpr (std::is_same_v<T, App>) {
-                ExprPrt lhs = eval(node.lhs);
-
-                if (lhs != node.lhs) {
-                    return make_app(lhs, node.rhs);
+                if (std::holds_alternative<Fun>(node.lhs->data)) {
+                    auto &fun_node = std::get<Fun>(node.lhs->data);
+                    return apply(fun_node.arg, fun_node.body, node.rhs, fun_node.arg_id);
                 }
 
-                if (std::holds_alternative<Fun>(lhs->data)) {
-                    auto &fun_node = std::get<Fun>(lhs->data);
-                    return apply(fun_node.arg, fun_node.body, node.rhs, fun_node.arg_id);
+                ExprPrt lhs = eval(node.lhs);
+                if (lhs != node.lhs) {
+                    return make_app(lhs, node.rhs);
                 }
 
                 ExprPrt rhs = eval(node.rhs);
@@ -267,19 +348,41 @@ ExprPrt eval(ExprPrt expr) {
 }
 
 int main() {
+    std::cout << "Welcome to Lamb (C++ Edition)\n";
+    std::cout << "Type 'exit' or 'quit' to exit.\n";
+
+    std::string input;
+    while (true) {
+        std::cout << "> ";
+        if (!std::getline(std::cin, input)) break;
+
+        if (input.empty()) continue;
+        if (input == "exit" || input == "quit") break;
+
+        try {
+            std::vector<Token> tokens = tokenizer(input);
+            Parser parser(tokens);
+            ExprPrt expr = parse_expr(parser);
+
+            ExprPrt next = eval(expr);
+            if (next == expr) {
+                trace_expr(expr);
+                std::cout << std::endl;
+            }
+            while (next != expr) {
+                expr = next;
+                trace_expr(next);
+                next = eval(expr);
+                std::string cmd;
+                std::getline(std::cin, cmd);
+            }
+        } catch (const ParseError &e) {
+            std::cerr << "Parse Error: " << e.what() << '\n';
+        }
+    }
+    return 0;
+
     // (\x.((\y.y) x))
     // ExprPrt expr = make_fun("x", make_app(make_fun("y", make_var("y")), make_var("x")));
     // (((\y.(\x.y)) x) unused)
-    std::string raw_expr = "(((\\y.(\\x.y)) x) unused)";
-    pparse(raw_expr);
-    ExprPrt expr = make_app(make_app(make_fun("y", make_fun("x", make_var("y"))), make_var("x")),
-                            make_var("unused"));
-
-    trace_expr(expr);
-    expr = eval(expr);
-    trace_expr(expr);
-    expr = eval(expr);
-    trace_expr(expr);
-
-    return 0;
 }

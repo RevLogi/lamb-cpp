@@ -286,7 +286,7 @@ void display(ExprPrt expr) {
 
 void trace_expr(ExprPrt expr) {
     display(expr);
-    // std::cout << std::endl;
+    std::cout.flush();
 }
 
 /** Apply val to the body (recursively)

@@ -4,10 +4,12 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <ostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -63,6 +65,8 @@ struct Token {
     std::string name;
 };
 
+std::unordered_map<std::string, ExprPrt> global_env;
+
 class Lexer {
 public:
     std::string_view source;
@@ -83,11 +87,13 @@ public:
             case '\\':
                 return {TokenKind::Lambda, "\\"};
             default:
-                if (isalnum(c)) {
+                if (validNameChar(c)) {
                     std::string name;
                     name += c;
-                    while (!isEnd() && isalnum(peek())) {
+                    char p = peek();
+                    while (!isEnd() && validNameChar(p)) {
                         name += advance();
+                        p = peek();
                     }
                     return {TokenKind::Name, name};
                 }
@@ -114,6 +120,8 @@ private:
             curr++;
         }
     }
+
+    bool validNameChar(char &c) { return isalnum(c) || c == '-' || c == '_'; }
 };
 
 class ParseError : public std::runtime_error {
@@ -128,7 +136,12 @@ public:
 
     Parser(std::vector<Token> &tokens) : tokens{tokens} {}
 
-    bool match(TokenKind kind) {
+    bool peek(TokenKind kind) {
+        TokenKind expected = isEnd() ? TokenKind::End : tokens[curr].kind;
+        return kind == expected;
+    }
+
+    bool consume(TokenKind kind) {
         TokenKind expected = isEnd() ? TokenKind::End : tokens[curr].kind;
         if (kind == expected) {
             curr++;
@@ -167,7 +180,8 @@ ExprPrt parse_term(Parser &parser);
 
 ExprPrt parse_expr(Parser &parser) {
     ExprPrt expr = parse_term(parser);
-    while (!(parser.match(TokenKind::CloseParen) || parser.match(TokenKind::End))) {
+    // Only peek, not consume
+    while (!(parser.peek(TokenKind::CloseParen) || parser.peek(TokenKind::End))) {
         ExprPrt rhs = parse_term(parser);
         expr = make_app(expr, rhs);
     }
@@ -175,10 +189,12 @@ ExprPrt parse_expr(Parser &parser) {
 }
 
 ExprPrt parse_term(Parser &parser) {
-    if (parser.match(TokenKind::Lambda)) {
+    if (parser.consume(TokenKind::Lambda)) {
         return parse_fun(parser);
-    } else if (parser.match(TokenKind::OpenParen)) {
-        return parse_expr(parser);
+    } else if (parser.consume(TokenKind::OpenParen)) {
+        ExprPrt res = parse_expr(parser);
+        parser.consume(TokenKind::CloseParen, "Syntax Error");
+        return res;
     } else {
         return parse_var(parser);
     }
@@ -302,6 +318,9 @@ ExprPrt apply(std::string arg, ExprPrt body, ExprPrt val, size_t id) {
                 }
                 return body;
             } else if constexpr (std::is_same_v<T, Fun>) {
+                if (node.arg == arg && node.arg_id == id) {
+                    return body;
+                }
                 ExprPrt new_body = apply(arg, node.body, val, id);
                 // Keep the old id
                 return make_fun_naive(node.arg, node.arg_id, new_body);
@@ -318,6 +337,12 @@ ExprPrt eval(ExprPrt expr) {
             using T = std::decay_t<decltype(node)>;
 
             if constexpr (std::is_same_v<T, Var>) {
+                if (node.id == 0) {
+                    auto it = global_env.find(node.name);
+                    if (it != global_env.end()) {
+                        return eval(it->second);
+                    }
+                }
                 return expr;
             } else if constexpr (std::is_same_v<T, Fun>) {
                 ExprPrt new_body = eval(node.body);
@@ -347,17 +372,48 @@ ExprPrt eval(ExprPrt expr) {
         expr->data);
 }
 
-int main() {
+int main(int argc, char **argv) {
+    int debug = 0;
+    if (argc > 1 && strcmp(argv[1], "-d") == 0) {
+        debug = 1;
+    }
+
     std::cout << "Welcome to Lamb (C++ Edition)\n";
     std::cout << "Type 'exit' or 'quit' to exit.\n";
 
     std::string input;
+
     while (true) {
         std::cout << "> ";
         if (!std::getline(std::cin, input)) break;
 
         if (input.empty()) continue;
         if (input == "exit" || input == "quit") break;
+
+        if (input.substr(0, 7) == "define ") {
+            size_t eq_pos = input.find(" ", 7);
+            if (eq_pos != std::string::npos) {
+                std::string name = input.substr(7, eq_pos - 7);
+                name.erase(0, name.find_first_not_of(" "));
+                if (!name.empty()) {
+                    name.erase(name.find_last_not_of(" ") + 1);
+                }
+
+                std::string expr_str = input.substr(eq_pos + 1);
+
+                try {
+                    std::vector<Token> tokens = tokenizer(expr_str);
+                    Parser parser(tokens);
+                    ExprPrt val_expr = parse_expr(parser);
+
+                    global_env[name] = val_expr;
+                    std::cout << "Defined: " << name << std::endl;
+                } catch (const ParseError &e) {
+                    std::cerr << "Define Error: " << e.what() << '\n';
+                }
+                continue;
+            }
+        }
 
         try {
             std::vector<Token> tokens = tokenizer(input);
@@ -371,10 +427,16 @@ int main() {
             }
             while (next != expr) {
                 expr = next;
-                trace_expr(next);
+                if (debug) {
+                    trace_expr(next);
+                    std::string cmd;
+                    std::getline(std::cin, cmd);
+                }
                 next = eval(expr);
-                std::string cmd;
-                std::getline(std::cin, cmd);
+            }
+            if (!debug) {
+                trace_expr(expr);
+                std::cout << std::endl;
             }
         } catch (const ParseError &e) {
             std::cerr << "Parse Error: " << e.what() << '\n';

@@ -22,10 +22,10 @@ For a better CLI experience with history and line-editing capabilities, wrapping
 $ rlwrap ./lamb
 ```
 
-Add `-t` flag to enable debug mode, allowing you to walk through the AST reduction step-by-step by pressing `Enter`:
+Add `-d` flag to enable debug mode, allowing you to walk through the AST reduction step-by-step by pressing `Enter`:
 
 ```bash
-$ rlwrap ./lamb -t
+$ rlwrap ./lamb -d
 > (\f.\x.f x) fun var
 ((\x.fun x) var)
 (fun var)

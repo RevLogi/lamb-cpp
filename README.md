@@ -44,7 +44,15 @@ $ rlwrap ./lamb -t
 > (\x.x) y
 ```
 
+### Pairs
+
+```
+> [x x]
+> [a [b [c d]]]
+```
+
 ### Bindings
+
 ```
 > define TRUE \t.\f.t
 ```
@@ -81,3 +89,14 @@ Defined: FACT
 ```
 
 You can learn more about lambda calculus on: [A Tutorial Introduction to the Lambda Calculus](http://www.inf.fu-berlin.de/lehre/WS03/alpi/lambda.pdf) 
+
+## Formal Grammar (BNF)
+
+``` 
+<expr> ::= <term> { <term> }
+
+<term> ::= <name>
+         | "\" <name> "." <expr>
+         | "(" <expr> ")"
+         | "[" <term> <term> "]"
+```

@@ -35,14 +35,19 @@ struct App {
     ExprPrt rhs;
 };
 
-using ExprData = std::variant<Var, Fun, App>;
+struct Pair {
+    ExprPrt left;
+    ExprPrt right;
+};
+
+using ExprData = std::variant<Var, Fun, App, Pair>;
 
 struct Expr {
     ExprData data;
     Expr(ExprData d) : data(std::move(d)) {};
 };
 
-ExprPrt bind_vars(ExprPrt body, std::string &arg, size_t new_id);
+ExprPrt bind_vars(ExprPrt body, std::string& arg, size_t new_id);
 
 ExprPrt make_var(std::string name) { return std::make_shared<Expr>(Var{std::move(name), 0}); }
 
@@ -58,7 +63,9 @@ ExprPrt make_fun(std::string arg, ExprPrt body) {
 
 ExprPrt make_app(ExprPrt lhs, ExprPrt rhs) { return std::make_shared<Expr>(App{lhs, rhs}); }
 
-enum class TokenKind { OpenParen, CloseParen, Dot, Lambda, Name, End };
+ExprPrt make_pair(ExprPrt left, ExprPrt right) { return std::make_shared<Expr>(Pair{left, right}); }
+
+enum class TokenKind { OpenParen, CloseParen, Dot, Lambda, Name, End, OpenBrack, CloseBrack };
 
 struct Token {
     TokenKind kind;
@@ -67,6 +74,7 @@ struct Token {
 
 std::unordered_map<std::string, ExprPrt> global_env;
 
+// Lexer Part
 class Lexer {
 public:
     std::string_view source;
@@ -86,6 +94,10 @@ public:
                 return {TokenKind::Dot, "."};
             case '\\':
                 return {TokenKind::Lambda, "\\"};
+            case '[':
+                return {TokenKind::OpenBrack, "["};
+            case ']':
+                return {TokenKind::CloseBrack, "]"};
             default:
                 if (validNameChar(c)) {
                     std::string name;
@@ -121,12 +133,55 @@ private:
         }
     }
 
-    bool validNameChar(char &c) { return isalnum(c) || c == '-' || c == '_'; }
+    bool validNameChar(char& c) { return isalnum(c) || c == '-' || c == '_'; }
 };
 
+std::vector<Token> tokenizer(std::string_view source) {
+    std::vector<Token> tokens;
+    Lexer lexer(source);
+    while (true) {
+        Token new_token = lexer.scanToken();
+        tokens.push_back(new_token);
+        if (new_token.kind == TokenKind::End) break;
+    }
+    return tokens;
+}
+
+void print_tokens(std::vector<Token>& tokens) {
+    for (Token token : tokens) {
+        std::string token_kind;
+        switch (token.kind) {
+            case TokenKind::OpenParen:
+                token_kind = "OpenParen";
+                break;
+            case TokenKind::CloseParen:
+                token_kind = "CloseParen";
+                break;
+            case TokenKind::Dot:
+                token_kind = "Dot";
+                break;
+            case TokenKind::Lambda:
+                token_kind = "Lambda";
+                break;
+            case TokenKind::Name:
+                token_kind = "Name";
+                break;
+            case TokenKind::End:
+                token_kind = "End";
+                break;
+            case TokenKind::OpenBrack:
+                token_kind = "OpenBrack";
+            case TokenKind::CloseBrack:
+                token_kind = "CloseBrack";
+        }
+        std::cout << token_kind << std::endl;
+    }
+}
+
+// Paser Part
 class ParseError : public std::runtime_error {
 public:
-    ParseError(const std::string &message) : std::runtime_error(message) {}
+    ParseError(const std::string& message) : std::runtime_error(message) {}
 };
 
 class Parser {
@@ -134,7 +189,7 @@ public:
     std::vector<Token> tokens;
     size_t curr = 0;
 
-    Parser(std::vector<Token> &tokens) : tokens{tokens} {}
+    Parser(std::vector<Token>& tokens) : tokens{tokens} {}
 
     bool peek(TokenKind kind) {
         TokenKind expected = isEnd() ? TokenKind::End : tokens[curr].kind;
@@ -163,22 +218,9 @@ private:
     bool isEnd() { return curr >= tokens.size(); }
 };
 
-std::vector<Token> tokenizer(std::string_view source) {
-    std::vector<Token> tokens;
-    Lexer lexer(source);
-    while (true) {
-        Token new_token = lexer.scanToken();
-        tokens.push_back(new_token);
-        if (new_token.kind == TokenKind::End) break;
-    }
-    return tokens;
-}
+ExprPrt parse_term(Parser& parser);
 
-ExprPrt parse_fun(Parser &parser);
-ExprPrt parse_var(Parser &parser);
-ExprPrt parse_term(Parser &parser);
-
-ExprPrt parse_expr(Parser &parser) {
+ExprPrt parse_expr(Parser& parser) {
     ExprPrt expr = parse_term(parser);
     // Only peek, not consume
     while (!(parser.peek(TokenKind::CloseParen) || parser.peek(TokenKind::End))) {
@@ -188,68 +230,43 @@ ExprPrt parse_expr(Parser &parser) {
     return expr;
 }
 
-ExprPrt parse_term(Parser &parser) {
+ExprPrt parse_term(Parser& parser) {
     if (parser.consume(TokenKind::Lambda)) {
-        return parse_fun(parser);
+        Token name_token = parser.consume(TokenKind::Name, "Function Name Syntax Error");
+        std::string name = name_token.name;
+
+        parser.consume(TokenKind::Dot, "Function Dot Syntax Error");
+        ExprPrt body = parse_expr(parser);
+
+        return make_fun(name, body);
     } else if (parser.consume(TokenKind::OpenParen)) {
         ExprPrt res = parse_expr(parser);
         parser.consume(TokenKind::CloseParen, "Syntax Error");
         return res;
-    } else {
-        return parse_var(parser);
-    }
-}
-
-ExprPrt parse_fun(Parser &parser) {
-    Token name_token = parser.consume(TokenKind::Name, "Function Name Syntax Error");
-    std::string name = name_token.name;
-    parser.consume(TokenKind::Dot, "Function Dot Syntax Error");
-    ExprPrt body = parse_expr(parser);
-
-    return make_fun(name, body);
-}
-
-ExprPrt parse_var(Parser &parser) {
-    std::string err_msg = "Variable Syntax Error";
-
-    Token name_token = parser.consume(TokenKind::Name, err_msg);
-    std::string name = name_token.name;
-
-    return make_var(name);
-}
-
-void pparse(std::vector<Token> &tokens) {
-    for (Token token : tokens) {
-        std::string token_kind;
-        switch (token.kind) {
-            case TokenKind::OpenParen:
-                token_kind = "OpenParen";
-                break;
-            case TokenKind::CloseParen:
-                token_kind = "CloseParen";
-                break;
-            case TokenKind::Dot:
-                token_kind = "Dot";
-                break;
-            case TokenKind::Lambda:
-                token_kind = "Lambda";
-                break;
-            case TokenKind::Name:
-                token_kind = "Name";
-                break;
-            case TokenKind::End:
-                token_kind = "End";
-                break;
+    } else if (parser.consume(TokenKind::OpenBrack)) {
+        ExprPrt left = parse_term(parser);
+        if (parser.peek(TokenKind::CloseBrack)) {
+            throw ParseError("Pair Syntax Error");
         }
-        std::cout << token_kind << std::endl;
+        ExprPrt right = parse_term(parser);
+
+        ExprPrt res = make_pair(left, right);
+        parser.consume(TokenKind::CloseBrack, "Pair Syntax Error");
+
+        return res;
+    } else {
+        Token name_token = parser.consume(TokenKind::Name, "Variable Syntax Error");
+        std::string name = name_token.name;
+
+        return make_var(name);
     }
 }
 
 /** Bind all the vars in the body (recursively)
  *  that has the same name of the outer arg with the new_id (unique) **/
-ExprPrt bind_vars(ExprPrt body, std::string &arg, size_t new_id) {
+ExprPrt bind_vars(ExprPrt body, std::string& arg, size_t new_id) {
     return std::visit(
-        [&](const auto &node) -> ExprPrt {
+        [&](const auto& node) -> ExprPrt {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, Var>) {
                 if (node.name == arg) {
@@ -266,6 +283,9 @@ ExprPrt bind_vars(ExprPrt body, std::string &arg, size_t new_id) {
                 return make_fun_naive(node.arg, node.arg_id, new_body);
             } else if constexpr (std::is_same_v<T, App>) {
                 return make_app(bind_vars(node.lhs, arg, new_id), bind_vars(node.rhs, arg, new_id));
+            } else if constexpr (std::is_same_v<T, Pair>) {
+                return make_pair(bind_vars(node.left, arg, new_id),
+                                 bind_vars(node.right, arg, new_id));
             }
         },
         body->data);
@@ -273,7 +293,7 @@ ExprPrt bind_vars(ExprPrt body, std::string &arg, size_t new_id) {
 
 void display(ExprPrt expr) {
     std::visit(
-        [](const auto &node) {
+        [](const auto& node) {
             using T = std::decay_t<decltype(node)>;
 
             if constexpr (std::is_same_v<T, Var>) {
@@ -281,7 +301,7 @@ void display(ExprPrt expr) {
             } else if constexpr (std::is_same_v<T, Fun>) {
                 std::cout << "(\\" << node.arg << '.';
                 if (std::holds_alternative<App>(node.body->data)) {
-                    auto &app_node = std::get<App>(node.body->data);
+                    auto& app_node = std::get<App>(node.body->data);
                     display(app_node.lhs);
                     std::cout << ' ';
                     display(app_node.rhs);
@@ -295,9 +315,20 @@ void display(ExprPrt expr) {
                 std::cout << ' ';
                 display(node.rhs);
                 std::cout << ')';
+            } else if constexpr (std::is_same_v<T, Pair>) {
+                std::cout << '[';
+                display(node.left);
+                std::cout << ' ';
+                display(node.right);
+                std::cout << ']';
             }
         },
         expr->data);
+}
+
+void test_trace(ExprPrt expr) {
+    display(expr);
+    std::cout << std::endl;
 }
 
 void trace_expr(ExprPrt expr) {
@@ -309,7 +340,7 @@ void trace_expr(ExprPrt expr) {
  *  Return the new body **/
 ExprPrt apply(std::string arg, ExprPrt body, ExprPrt val, size_t id) {
     return std::visit(
-        [&](const auto &node) -> ExprPrt {
+        [&](const auto& node) -> ExprPrt {
             using T = std::decay_t<decltype(node)>;
 
             if constexpr (std::is_same_v<T, Var>) {
@@ -318,6 +349,7 @@ ExprPrt apply(std::string arg, ExprPrt body, ExprPrt val, size_t id) {
                 }
                 return body;
             } else if constexpr (std::is_same_v<T, Fun>) {
+                // Enable shadowing
                 if (node.arg == arg && node.arg_id == id) {
                     return body;
                 }
@@ -326,6 +358,8 @@ ExprPrt apply(std::string arg, ExprPrt body, ExprPrt val, size_t id) {
                 return make_fun_naive(node.arg, node.arg_id, new_body);
             } else if constexpr (std::is_same_v<T, App>) {
                 return make_app(apply(arg, node.lhs, val, id), apply(arg, node.rhs, val, id));
+            } else if constexpr (std::is_same_v<T, Pair>) {
+                return make_pair(apply(arg, node.left, val, id), apply(arg, node.right, val, id));
             }
         },
         body->data);
@@ -333,7 +367,7 @@ ExprPrt apply(std::string arg, ExprPrt body, ExprPrt val, size_t id) {
 
 ExprPrt eval(ExprPrt expr) {
     return std::visit(
-        [&](const auto &node) -> ExprPrt {
+        [&](const auto& node) -> ExprPrt {
             using T = std::decay_t<decltype(node)>;
 
             if constexpr (std::is_same_v<T, Var>) {
@@ -352,7 +386,7 @@ ExprPrt eval(ExprPrt expr) {
                 return expr;
             } else if constexpr (std::is_same_v<T, App>) {
                 if (std::holds_alternative<Fun>(node.lhs->data)) {
-                    auto &fun_node = std::get<Fun>(node.lhs->data);
+                    auto& fun_node = std::get<Fun>(node.lhs->data);
                     return apply(fun_node.arg, fun_node.body, node.rhs, fun_node.arg_id);
                 }
 
@@ -367,12 +401,24 @@ ExprPrt eval(ExprPrt expr) {
                 }
 
                 return expr;
+            } else if constexpr (std::is_same_v<T, Pair>) {
+                ExprPrt left = eval(node.left);
+                if (left != node.left) {
+                    return make_pair(left, node.right);
+                }
+
+                ExprPrt right = eval(node.right);
+                if (right != node.right) {
+                    return make_pair(node.left, right);
+                }
+
+                return expr;
             }
         },
         expr->data);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     int debug = 0;
     if (argc > 1 && strcmp(argv[1], "-d") == 0) {
         debug = 1;
@@ -408,7 +454,7 @@ int main(int argc, char **argv) {
 
                     global_env[name] = val_expr;
                     std::cout << "Defined: " << name << std::endl;
-                } catch (const ParseError &e) {
+                } catch (const ParseError& e) {
                     std::cerr << "Define Error: " << e.what() << '\n';
                 }
                 continue;
@@ -421,10 +467,6 @@ int main(int argc, char **argv) {
             ExprPrt expr = parse_expr(parser);
 
             ExprPrt next = eval(expr);
-            if (next == expr) {
-                trace_expr(expr);
-                std::cout << std::endl;
-            }
             while (next != expr) {
                 expr = next;
                 if (debug) {
@@ -434,11 +476,11 @@ int main(int argc, char **argv) {
                 }
                 next = eval(expr);
             }
-            if (!debug) {
+            if (!debug || next == expr) {
                 trace_expr(expr);
                 std::cout << std::endl;
             }
-        } catch (const ParseError &e) {
+        } catch (const ParseError& e) {
             std::cerr << "Parse Error: " << e.what() << '\n';
         }
     }

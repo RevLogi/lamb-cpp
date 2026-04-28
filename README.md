@@ -32,6 +32,21 @@ $ rlwrap ./lamb -d
 > 
 ```
 
+Run a script file or preload an environment file with a file path.
+
+```bash
+$ ./lamb factorial.lamb
+(\f.(\x.f (f (f (f (f (f x)))))))
+$ ./lamb -e factorial.env
+Welcome to Lamb (C++ Edition)
+Type 'exit' or 'quit' to exit.
+> FACT 3
+(\f.(\x.f (f (f (f (f (f x)))))))
+>
+```
+
+
+
 ## Syntax
 
 ### Lambda Functions

@@ -12,7 +12,7 @@ A tiny, pure functional programming language based on untyped lambda calculus. B
 ## Quick Start
 
 ```bash
-$ g++ -std=c++20 lamb.cpp -o lamb
+$ make clean && make
 $ ./lamb
 ```
 
@@ -42,7 +42,6 @@ Welcome to Lamb (C++ Edition)
 Type 'exit' or 'quit' to exit.
 > FACT 3
 (\f.(\x.f (f (f (f (f (f x)))))))
->
 ```
 
 
@@ -52,9 +51,17 @@ Type 'exit' or 'quit' to exit.
 ### Lambda Functions
 ```
 > \x.x
+> \x.(\y.(\z.x y z))
+```
+
+Or with some syntax sugar
+
+```
+> \<x y z>.[x y z]
 ```
 
 ### Applications
+
 ```
 > (\x.x) y
 ```
@@ -62,8 +69,8 @@ Type 'exit' or 'quit' to exit.
 ### Pairs
 
 ```
-> [x x]
-> [a [b [c d]]]
+> (a.b)
+> (a.(b.(c.d)))
 ```
 
 ### Bindings
@@ -108,10 +115,12 @@ You can learn more about lambda calculus on: [A Tutorial Introduction to the Lam
 ## Formal Grammar (BNF)
 
 ``` 
-<expr> ::= <term> { <term> }
+<expr>  ::= <term> { <term> }
 
-<term> ::= <name>
-         | "\" <name> "." <expr>
-         | "(" <expr> ")"
-         | "[" <term> <term> "]"
+<term>  ::= <name>
+          | "\" <names> "." <expr>
+          | "(" <expr> ")"
+          | "(" <term> "." <term> ")"
+         
+<names> ::= <name> { <name> }
 ```
